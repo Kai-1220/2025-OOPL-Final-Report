@@ -242,35 +242,38 @@ public:
 ### 程式技術
 在開發Slay the Spire的過程中，我們運用了多種程式技術和設計模式，以下是一些主要的技術亮點：
 
-**1. 地圖生成算法**
-我們實現了一個程序化地圖生成系統，能夠生成多樣化且平衡的地圖。地圖生成考慮了以下因素：
-- 層級結構：從底層向上生成
-- 分支路徑：每一層都有多條可能的路徑
-- 房間類型分配：根據設定的權重分配不同類型的房間
-- 連接規則：確保所有節點都有合理的連接
+**1. 多層次繼承與多型系統**
+我們實現了一個深度的繼承系統，使程式碼高度可重用且可擴展：
+- **類別層次結構**：從抽象基類（如`Character`、`Cards`、`Rooms`等）延伸出具體實現
+- **虛擬函數與覆寫**：透過`virtual`與`override`確保正確的多型行為
+- **抽象介面隔離**：將共用功能提取到基類，讓子類專注於實現特定行為
 
 ```cpp
-void Dungeons::set_next_node_oscillate_and_edge(const bool value)const{
-    if(dungeon_shared.current_node==nullptr){
-        for(const auto&it:m_map[0])
-            if(it!=nullptr) it->SetReadyToConnect(value);
-    }else{
-        dungeon_shared.current_node->MarkAllEdge(value);
-        if(dungeon_shared.current_node->HasEdge(Map::Direction::right))
-            m_map[dungeon_shared.current_node->y+1][dungeon_shared.current_node->x+1]->SetReadyToConnect(value);
-        if(dungeon_shared.current_node->HasEdge(Map::Direction::middle) && dungeon_shared.current_node->y!=static_cast<int>(m_map.size())-1)
-            m_map[dungeon_shared.current_node->y+1][dungeon_shared.current_node->x]->SetReadyToConnect(value);
-        if(dungeon_shared.current_node->HasEdge(Map::Direction::left))
-            m_map[dungeon_shared.current_node->y+1][dungeon_shared.current_node->x-1]->SetReadyToConnect(value);
-    }
-}
+class Cards:public Card_soul, public std::enable_shared_from_this<Cards>{
+public:
+    Cards(RUtil::AtlasRegionID card_name, RUtil::Cards_Text_ID card_text_id, Rarity rarity, Type type, Color color, Target target,
+        const int base_cost, const int base_damage, const int base_block, const int base_magic_num);
+    virtual ~Cards() = default;
+    
+    virtual void Use(Dungeon::Dungeon_shared &dungeon_shared,const std::shared_ptr<Monster::Monsters> &target_monster)=0;
+    virtual std::shared_ptr<Cards> Clone()const=0;
+    virtual void OnEndOfTurn(Dungeon::Dungeon_shared &dungeon_shared);
+    
+protected:
+    virtual void Upgrade(bool for_preview)=0;
+    bool upgraded=false;
+    bool exhaust=false;
+    bool ethereal=false;
+    int base_damage, base_block, base_magic_num, base_cost;
+    int damage, block, magic_num, cost;
+};
 ```
 
-**2. 卡牌系統設計**
-我們設計了一個靈活的卡牌系統，使用了以下技術：
-- 繼承與多態：所有卡牌繼承自父類，實現特定的行為
-- 原型模式：使用Clone()方法創建卡牌的副本
-- 組合模式：通過組合基本效果來實現複雜的卡牌效果
+**2. 命令模式與行動隊列系統**
+我們實現了一個精細的行動隊列系統，用於管理遊戲中的各種行動和效果：
+- 命令封裝：將不同的行動（攻擊、加盾、施加狀態）封裝為命令對象
+- 隊列執行：按順序處理行動，確保遊戲邏輯的正確性
+- 回調機制：行動完成後自動觸發後續行動，形成連鎖效果
 
 ```cpp
 void Uppercut::Use(Dungeon::Dungeon_shared &dungeon_shared, const std::shared_ptr<Monster::Monsters> &target_monster){
@@ -286,11 +289,11 @@ void Uppercut::Use(Dungeon::Dungeon_shared &dungeon_shared, const std::shared_pt
 }
 ```
 
-**3. 怪物AI系統**
-我們為不同的怪物實現了獨特的AI行為，使用了以下技術：
-- 狀態模式：管理怪物的不同行為狀態
-- 策略模式：實現不同的攻擊策略
-- 觀察者模式：響應遊戲狀態的變化
+**3. 狀態模式與怪物AI系統**
+我們為不同的怪物實現了獨特的AI行為系統：
+- 行為狀態機：每個怪物維護自己的狀態和行為歷史
+- 條件轉換：基於內部狀態和外部環境動態選擇下一步行動
+- 行為追蹤：記錄歷史行為，避免重複相同的攻擊模式
 
 ```cpp
 void SpikeSlimeL::next_move(Dungeon::Dungeon_shared &dungeon_shared){
@@ -321,41 +324,36 @@ void SpikeSlimeL::next_move(Dungeon::Dungeon_shared &dungeon_shared){
 }
 ```
 
-**4. 行動隊列系統**
-我們實現了一個行動隊列系統，用於管理遊戲中的各種行動和效果：
-- 命令模式：將各種行動封裝為命令對象
-- 隊列系統：按順序執行行動
-- 回調機制：行動完成後觸發後續行動
+**4. 原型模式與卡牌複製系統**
+我們使用原型模式實現卡牌的複製和管理：
+- 深度複製：透過Clone()方法創建卡牌的完整副本
+- 狀態保存：複製時保留卡牌的升級狀態和其他屬性
+- 記憶體優化：只在需要時創建新的卡牌實例
 
 ```cpp
-void BlueSlaver::Action(Dungeon::Dungeon_shared &dungeon_shared){
-    dungeon_shared.action_group_handler.AddActionBot(std::make_shared<Action::Anim_set_action>(shared_from_this(), Character::Animation::ATTACK_SLOW));
-    switch(current_move()){
-        case BlueSlaverAction::Stab:
-            dungeon_shared.action_group_handler.AddActionBot(std::make_shared<Action::Damage_action>(Damage_info{current_damage(), shared_from_this(), AttackType::slash_horizontal}, dungeon_shared.player));
-            break;
-        case BlueSlaverAction::Rake:
-            dungeon_shared.action_group_handler.AddActionBot(std::make_shared<Action::Damage_action>(Damage_info{current_damage(), shared_from_this(), AttackType::slash_diagonal}, dungeon_shared.player));
-            dungeon_shared.action_group_handler.AddActionBot(std::make_shared<Action::Apply_power_action>(RUtil::Powers_Text_ID::Weakened, 1, shared_from_this(), dungeon_shared.player, true));
-            break;
-        default:
-            break;
+// 卡牌基類中的Clone接口
+virtual std::shared_ptr<Cards> Clone() const = 0;
+
+// 具體卡牌中的實現
+std::shared_ptr<Cards> Strike::Clone() const {
+    auto card = std::make_shared<Strike>(card_text_id);
+    if(this->upgraded) card->CallUpgrade(true);
+    return card;
+}
+
+// 在Draw_pile_screen中使用Clone功能
+void Draw_pile_screen::open(Dungeon::Dungeon_shared &dungeon_shared) {
+    for(const auto& card : dungeon_shared.card_group_handler.draw_pile) {
+        this->group.emplace_back(card->Clone());
     }
 }
 ```
 
-**5. 狀態效果系統**
-我們實現了一個靈活的狀態效果系統，處理各種遊戲中的狀態：
-- 裝飾器模式：狀態效果修飾角色的行為
-- 訪問者模式：處理不同角色對狀態效果的不同反應
-- 觀察者模式：狀態效果響應遊戲事件
-
-**6. 資源管理**
-我們使用了智慧指標和RAII原則來管理遊戲資源：
-- std::shared_ptr：管理共享資源
-- std::unique_ptr：管理獨佔資源
-- RAII：確保資源的正確釋放
-
+**5. 智能指針與資源管理**
+我們使用現代C++的智能指針技術進行記憶體和資源管理：
+- 共享所有權：使用std::shared_ptr管理物件的生命週期
+- self-referencing：透過enable_shared_from_this安全地獲取自身的智能指針
+- RAII原則：確保資源的自動分配和釋放，避免記憶體洩漏
 ```cpp
 class Dungeon_shared{
 public:
@@ -377,13 +375,23 @@ public:
 };
 ```
 
-**7. 隨機性系統**
-我們實現了一個可控的隨機性系統，確保遊戲的隨機性和重放性(Replayability)：
-- 種子系統：使用種子生成隨機序列
-- 不同的隨機生成器：為不同的遊戲元素使用獨立的隨機生成器
-- 權重系統：根據權重進行隨機選擇
+**6. 策略模式與可配置隨機系統**
+我們實現了一個可控的隨機性系統，確保遊戲的隨機性和重放性：
+- 概率選擇器：通過權重配置不同事件的發生概率
+- 獨立隨機源：為不同遊戲元素使用專用的隨機生成器
+- 種子系統：使用種子生成可重現的隨機序列
 
 ```cpp
+static constexpr auto ROOM_PROBABILITY = RUtil::make_probability_selector(
+    std::array{
+        std::pair{Room::Room_type::Elite, 0.08F},
+        std::pair{Room::Room_type::Event, 0.22F},
+        std::pair{Room::Room_type::Rest, 0.12F},
+        std::pair{Room::Room_type::Shop, 0.05F},
+        std::pair{Room::Room_type::Monster, 0.53F}
+    }
+);
+
 static constexpr auto ELITE_PROBABILITY = RUtil::make_probability_selector(
     std::array{
         std::pair{Monster::GroupName::Gremlin_Nob, 1.0F},
@@ -393,33 +401,121 @@ static constexpr auto ELITE_PROBABILITY = RUtil::make_probability_selector(
 );
 ```
 
-**8. 動畫系統**
-我們實現了一個基於時間的動畫系統，使遊戲視覺效果更加流暢：
-- 補間動畫：使用線性和非線性插值
-- 定時器：基於時間的動畫控制
-- 狀態機：管理動畫狀態
+**7. 裝飾器模式與狀態效果系統**
+我們實現了一個靈活的狀態效果系統，處理角色的各種臨時屬性修改：
+- 屬性修飾：狀態效果作為裝飾器修改角色的基本屬性
+- 效果堆疊：多個狀態效果可以疊加，影響最終數值計算
+- 計算鏈：通過優先順序管理不同效果的應用順序
 
 ```cpp
-void Dungeons::update_fading(){
-    fade_timer-=RUtil::Game_Input::delta_time();
-    if(is_fade_in){
-        fade_color_a = RUtil::Math::interpolation_fade(0.0F,1.0F,fade_timer/0.8F);
-        if(fade_timer<0.0F){
-            fade_timer=0.0F;
-            fade_color_a=0.0F;
-            is_fade_in=false;
-        }
-    }else if(is_fade_out){
-        fade_color_a = RUtil::Math::interpolation_fade(1.0F,0.0F,fade_timer/0.8F);
-        if(fade_timer<0.0F){
-            fade_timer=0.0F;
-            fade_color_a=1.0F;
-            is_fade_out=false;
-        }
-    }else LOG_ERROR("Not fading but the update_fading() be called.");
+void Cards::CommonRefreshDamage(const Power::Power_group &player_powers){
+    float dmg = static_cast<float>(base_damage);
+    // 第一階段修飾
+    for(const auto&it:player_powers){
+        dmg = it->calculate_damage_dealt(dmg);
+    }
+    // 最終修飾階段
+    for(const auto&it:player_powers){
+        dmg = it->calculate_final_damage_dealt(dmg);
+    }
+    this->damage=static_cast<int>(dmg);
+    if(this->damage < 0) this->damage = 0;
 }
 ```
 
+**8. 訪問者模式與卡牌效果系統**
+我們使用訪問者模式實現卡牌對不同目標的效果處理：
+- 接受者與訪問者分離：卡牌效果（訪問者）與接受者（玩家/怪物）分離
+- 雙重分發：基於卡牌類型和目標類型選擇正確的行為
+- 擴展性：可以輕鬆添加新的卡牌和效果，無需修改現有代碼
+
+```cpp
+// 卡牌使用時的訪問者模式實現
+void Shockwave::Use(Dungeon::Dungeon_shared &dungeon_shared, const std::shared_ptr<Monster::Monsters> &target_monster){
+    // 對所有怪物應用相同的效果
+    for(const auto& m : dungeon_shared.room_monsters.monsters){
+        // 添加虛弱效果
+        dungeon_shared.action_group_handler.AddActionBot(
+            std::make_shared<Action::Apply_power_action>(
+                RUtil::Powers_Text_ID::Weakened, this->magic_num, 
+                dungeon_shared.player, m
+            )
+        );
+        // 添加易傷效果
+        dungeon_shared.action_group_handler.AddActionBot(
+            std::make_shared<Action::Apply_power_action>(
+                RUtil::Powers_Text_ID::Vulnerable, this->magic_num, 
+                dungeon_shared.player, m
+            )
+        );
+    }
+}
+```
+**9. 模板方法模式與泛型怪物行為**
+我們使用模板方法模式實現通用的怪物行為框架：
+- 行為骨架：在基類中定義算法的整體結構
+- 行為鉤子：允許子類重寫特定的行為步驟
+- 泛型實現：使用模板參數實現類型安全的行為追蹤
+
+```cpp
+// 怪物行為追蹤器模板類
+template<size_t N, typename ActionEnum>
+class Monster_move_tracker : public Monsters {
+protected:
+    // 模板方法：設置行動意圖
+    void set_move(ActionEnum move, const std::shared_ptr<Effect::Intentions> &intention, 
+                 Intent intent, const Power::Power_group &target_powers) {
+        current_move_index = static_cast<int>(move);
+        move_history[move_history_index] = current_move_index;
+        move_history_index = (move_history_index + 1) % N;
+        this->intent = intent;
+        this->intention = intention;
+    }
+    
+    // 檢查最近N次行動是否包含指定行動
+    bool is_last_move(ActionEnum action) const {
+        return move_history[(move_history_index - 1 + N) % N] == static_cast<int>(action);
+    }
+    
+private:
+    std::array<int, N> move_history;
+    int move_history_index = 0;
+    int current_move_index = -1;
+};
+```
+
+**10. 觀察者模式與事件通知系統**
+我們實現了一個基於觀察者模式的事件系統，實現各模組間的鬆散耦合：
+- 事件發布：遊戲狀態變化時發布事件通知
+- 事件訂閱：各模組可以訂閱關注的事件類型
+- 異步處理：事件可以即時處理或放入隊列延遲處理
+
+```cpp
+// 卡牌使用時的訪問者模式實現
+// 玩家受到傷害時的事件處理
+void Player::damage(const Damage_info& damage_info, Dungeon::Dungeon_shared &dungeon_shared, bool deduct_block){
+    // 執行傷害計算
+    auto final_damage = calculate_damage(damage_info);
+    
+    // 發布傷害前事件
+    for(const auto& power : this->powers) {
+        power->on_before_damaged(final_damage);
+    }
+    
+    // 執行傷害
+    this->current_hp -= final_damage;
+    
+    // 發布傷害後事件
+    for(const auto& power : this->powers) {
+        power->on_after_damaged(final_damage);
+    }
+    
+    // 檢查生命值並發布相關事件
+    if(this->current_hp <= 0) {
+        this->on_death(dungeon_shared);
+    }
+}
+```
 
 ## 結語
 
