@@ -120,10 +120,10 @@ enum class Type{
 
 本專案採用物件導向設計，分為多個相互關聯的系統。以下是主要的架構組成：
 
-主遊戲架構
+主遊戲架構<br>
 ![架構圖](./img/Architecture.png)<br><br>
 
-輔助系統架構
+輔助系統架構<br>
 ![架構圖2](./img/Architecture2.png)<br><br>
 
 
