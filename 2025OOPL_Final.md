@@ -244,9 +244,9 @@ public:
 
 **1. 多層次繼承與多型系統**
 我們實現了一個深度的繼承系統，使程式碼高度可重用且可擴展：
-- **類別層次結構**：從抽象基類（如`Character`、`Cards`、`Rooms`等）延伸出具體實現
+- **類別層次結構**：從抽象父類（如`Character`、`Cards`、`Rooms`等）延伸出具體實現
 - **虛擬函數與覆寫**：透過`virtual`與`override`確保正確的多型行為
-- **抽象介面隔離**：將共用功能提取到基類，讓子類專注於實現特定行為
+- **抽象介面隔離**：將共用功能提取到父類，讓子類專注於實現特定行為
 
 ```cpp
 class Cards:public Card_soul, public std::enable_shared_from_this<Cards>{
@@ -331,20 +331,22 @@ void SpikeSlimeL::next_move(Dungeon::Dungeon_shared &dungeon_shared){
 - 記憶體優化：只在需要時創建新的卡牌實例
 
 ```cpp
-// 卡牌基類中的Clone接口
-virtual std::shared_ptr<Cards> Clone() const = 0;
-
-// 具體卡牌中的實現
-std::shared_ptr<Cards> Strike::Clone() const {
-    auto card = std::make_shared<Strike>(card_text_id);
-    if(this->upgraded) card->CallUpgrade(true);
-    return card;
-}
-
-// 在Draw_pile_screen中使用Clone功能
-void Draw_pile_screen::open(Dungeon::Dungeon_shared &dungeon_shared) {
-    for(const auto& card : dungeon_shared.card_group_handler.draw_pile) {
-        this->group.emplace_back(card->Clone());
+void Show_card_to_draw_pile::update(Dungeon::Dungeon_shared &dungeon_shared){
+    if(this->duration==ACTION_DUR_XLONG){//first in
+        dungeon_shared.gen_group.AddTop(std::make_shared<Card_paticle_gen>(card->GetTargetX(), card->GetTargetY()));
+        //add to draw_pile at first update
+        dungeon_shared.card_group_handler.draw_pile_add_at(
+            dungeon_shared.random_package.card_shuffle_rng.NextInt(dungeon_shared.card_group_handler.size<Card::GroupType::draw_pile>()+1),
+            card
+        );
+        //force render
+        dungeon_shared.card_group_handler.AddBot<Card::GroupType::force_render_cards>(card);
+    }
+    TimeGo();
+    this->card->update(dungeon_shared.top_effs);
+    if(this->is_done){
+        dungeon_shared.card_group_handler.erase<Card::GroupType::force_render_cards>(card);//remove from force render
+        dungeon_shared.card_group_handler.to_draw_pile(card);
     }
 }
 ```
@@ -410,11 +412,9 @@ static constexpr auto ELITE_PROBABILITY = RUtil::make_probability_selector(
 ```cpp
 void Cards::CommonRefreshDamage(const Power::Power_group &player_powers){
     float dmg = static_cast<float>(base_damage);
-    // 第一階段修飾
     for(const auto&it:player_powers){
         dmg = it->calculate_damage_dealt(dmg);
     }
-    // 最終修飾階段
     for(const auto&it:player_powers){
         dmg = it->calculate_final_damage_dealt(dmg);
     }
@@ -453,42 +453,117 @@ void Shockwave::Use(Dungeon::Dungeon_shared &dungeon_shared, const std::shared_p
 ```
 **9. 模板方法模式與泛型怪物行為**
 我們使用模板方法模式實現通用的怪物行為框架：
-- 行為骨架：在基類中定義算法的整體結構
+- 行為骨架：在父類中定義算法的整體結構
 - 行為鉤子：允許子類重寫特定的行為步驟
 - 泛型實現：使用模板參數實現類型安全的行為追蹤
 
 ```cpp
-// 怪物行為追蹤器模板類
-template<size_t N, typename ActionEnum>
-class Monster_move_tracker : public Monsters {
-protected:
-    // 模板方法：設置行動意圖
-    void set_move(ActionEnum move, const std::shared_ptr<Effect::Intentions> &intention, 
-                 Intent intent, const Power::Power_group &target_powers) {
-        current_move_index = static_cast<int>(move);
-        move_history[move_history_index] = current_move_index;
-        move_history_index = (move_history_index + 1) % N;
-        this->intent = intent;
-        this->intention = intention;
+template <int N, typename EnumClass>
+class Monster_move_tracker : public Monster::Monsters 
+{
+public:
+    template <typename...Args>
+    Monster_move_tracker(Args&&...args)
+        :Monster::Monsters(std::forward<Args>(args)...),
+        current_n(0),
+        idx(0){}
+    ~Monster_move_tracker() override =default;
+    bool is_current_move(EnumClass move_enum)const noexcept{
+        if(current_n==0) return false;
+        return arr[Math::SimpleRangeChange(idx+current_n-1, N)]==move_enum;
     }
-    
-    // 檢查最近N次行動是否包含指定行動
-    bool is_last_move(ActionEnum action) const {
-        return move_history[(move_history_index - 1 + N) % N] == static_cast<int>(action);
+    bool is_Nth_previous_move(int n, EnumClass move_enum)const noexcept{
+        if(current_n<n) return false;
+        return arr[Math::SimpleRangeChange(idx+current_n-n, N)]==move_enum;
     }
-    
+    bool is_last_two_move(EnumClass move_enum)const noexcept{
+        if(current_n<2) return false;
+        return arr[Math::SimpleRangeChange(idx+current_n-2, N)]==move_enum && arr[Math::SimpleRangeChange(idx+current_n-1, N)]==move_enum;     
+    }
+    bool is_last_N_move(int n, EnumClass move_enum)const noexcept{
+        if(current_n<n) return false;
+        for(int i=1;i<=n;i++)
+            if(arr[Math::SimpleRangeChange(idx+current_n-i, N)]!=move_enum) return false;
+        return true;
+    }
+    template <typename...Args>
+    void set_move(EnumClass move_enum, Args&&...args){
+        record(move_enum);
+        Monster::Monsters::set_move(std::forward<Args>(args)...);
+    }
+    EnumClass current_move()const{
+        if(current_n==0) LOG_ERROR("Getting current_move before set_move() called.");
+        return arr[Math::SimpleRangeChange(idx+current_n-1, N)];
+    }
 private:
-    std::array<int, N> move_history;
-    int move_history_index = 0;
-    int current_move_index = -1;
+    std::array<EnumClass, N> arr;
+    int current_n;
+    int idx;
+    void record(EnumClass move_enum)noexcept{
+        if(current_n<N){
+            arr[current_n++]=move_enum;
+        }else{
+            arr[idx++]=move_enum;
+            if(idx>=N)idx=0;
+        }
+    }
 };
 ```
 
-**10. 觀察者模式與事件通知系統**
+**10. 地圖生成算法**
+我們實現了一個程序化地圖生成系統，能夠生成多樣化且平衡的地圖：
+- 層級結構：從底層向上生成地圖
+- 分支路徑：確保每層有多條可能的路徑
+- 連接規則：確保節點之間有合理的連接關係
+```cpp
+void Dungeons::set_next_node_oscillate_and_edge(const bool value)const{
+    if(dungeon_shared.current_node==nullptr){
+        for(const auto&it:m_map[0])
+            if(it!=nullptr) it->SetReadyToConnect(value);
+    }else{
+        dungeon_shared.current_node->MarkAllEdge(value);
+        if(dungeon_shared.current_node->HasEdge(Map::Direction::right))
+            m_map[dungeon_shared.current_node->y+1][dungeon_shared.current_node->x+1]->SetReadyToConnect(value);
+        if(dungeon_shared.current_node->HasEdge(Map::Direction::middle) && dungeon_shared.current_node->y!=static_cast<int>(m_map.size())-1)
+            m_map[dungeon_shared.current_node->y+1][dungeon_shared.current_node->x]->SetReadyToConnect(value);
+        if(dungeon_shared.current_node->HasEdge(Map::Direction::left))
+            m_map[dungeon_shared.current_node->y+1][dungeon_shared.current_node->x-1]->SetReadyToConnect(value);
+    }
+}
+```
+
+**11. 動畫系統與視覺效果**
+我們實現了一個基於時間的動畫系統，使遊戲視覺效果更加流暢：
+- 補間動畫：使用線性和非線性插值實現平滑過渡
+- 定時器控制：基於時間的動畫狀態管理
+- 視覺反饋：為遊戲事件提供視覺回饋
+```cpp
+void Dungeons::update_fading(){
+    fade_timer-=RUtil::Game_Input::delta_time();
+    if(is_fade_in){
+        fade_color_a = RUtil::Math::interpolation_fade(0.0F,1.0F,fade_timer/0.8F);
+        if(fade_timer<0.0F){
+            fade_timer=0.0F;
+            fade_color_a=0.0F;
+            is_fade_in=false;
+        }
+    }else if(is_fade_out){
+        fade_color_a = RUtil::Math::interpolation_fade(1.0F,0.0F,fade_timer/0.8F);
+        if(fade_timer<0.0F){
+            fade_timer=0.0F;
+            fade_color_a=1.0F;
+            is_fade_out=false;
+        }
+    }else LOG_ERROR("Not fading but the update_fading() be called.");
+}
+```
+
+**12. 觀察者模式與事件通知系統**
 我們實現了一個基於觀察者模式的事件系統，實現各模組間的鬆散耦合：
 - 事件發布：遊戲狀態變化時發布事件通知
 - 事件訂閱：各模組可以訂閱關注的事件類型
 - 異步處理：事件可以即時處理或放入隊列延遲處理
+
 
 ```cpp
 // 卡牌使用時的訪問者模式實現
@@ -577,10 +652,133 @@ void AcidSlimeS::next_move(Dungeon::Dungeon_shared &dungeon_shared){
 **5. 性能優化**
 - **問題**：遊戲中有大量的視覺效果和計算，如何確保遊戲在各種硬件上運行流暢？
 - **解決方案**：我們採用了多種優化技術，包括：
-  - 對象池：重用常用對象，減少記憶體分配和釋放
+  - 物件池：重用常用物件，減少記憶體分配和釋放
   - 延遲加載：只在需要時加載資源
   - 視覺效果優化：使用精靈圖和批量渲染
   - 算法優化：優化關鍵計算過程
+```cpp
+// 對象池實現：重用效果對象以減少記憶體分配和釋放
+template <typename T>
+class Effect_pool{
+public:
+    // 從對象池獲取效果實例，避免頻繁分配/釋放記憶體
+    template <typename...Args>
+    static T* GetEffect(Args&&...args){
+        if constexpr (has_UseAutoRelease<T>::value){
+            static bool once=false;
+            if(!once){
+                Auto_release_pool_manager::JoinToAutoCheck(Effect_pool<T>::CheckBoxRelease);
+                once=true;
+            }
+            in_use=true; // 標記為使用中
+        }
+        
+        if(curr_n==n){ // 對象池已滿
+            if(box[curr_pos]->IsDone()){ // 可以重用對象
+                box[curr_pos]->CallInitial(std::forward<Args>(args)...);
+                const auto& ret=box[curr_pos++];
+                if(n<=curr_pos)curr_pos=0;
+                return &(*ret);
+            }
+            if(!box[curr_pos]->IsDone()&&n!=MAX){ // 擴展對象池大小
+                if(MAX<(n<<1)) n=MAX;
+                else n<<=1;
+                box.reserve(n);
+                std::rotate(box.begin(),box.begin()+curr_pos,box.end());
+                curr_pos=0; // 修正當前位置
+            }
+        }
+        // 創建新對象
+        box.emplace_back(std::make_shared<T>(std::forward<Args>(args)...));
+        curr_n++;
+        return &(*box.back());
+    }
+
+private:
+    // 檢查並釋放不再使用的對象
+    static void CheckBoxRelease(){
+        if constexpr (has_UseAutoRelease<T>::value){
+            if(!in_use&&_check(box)){
+                if((n>>1)<MIN) n=MIN;
+                else n>>=1;
+                if(n<static_cast<int>(box.size()))
+                    box.resize(n); // 釋放記憶體
+                curr_pos=0;
+                curr_n=n;
+            }else{
+                in_use=false;
+            }
+        }
+    }
+    
+    static std::vector<std::shared_ptr<T>> box;
+    static int n;
+    static int curr_pos,curr_n;
+    static bool in_use;
+    static int constexpr MIN=2;
+    static int constexpr MAX=1<<20;
+};
+```
+```cpp
+// 視覺效果優化：使用批量渲染處理多個效果
+void Effect_group::render(const std::shared_ptr<Draw::Draw_2D> &r2)const{
+    // 批量渲染所有效果
+    for(const auto &it:box)
+        it->render(r2);
+    for(const auto &it:box2)
+        it->render(r2);
+    // 重設混合模式
+    r2->SetBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+}
+
+// 高效率更新效果：只保留活躍效果
+template <typename T>
+static void _update(T &_box){
+    for (auto it = _box.begin(); it != _box.end();) {
+        (*it)->update();
+        if ((*it)->IsDone())
+            it = _box.erase(it); // 移除已完成的效果
+        else
+            ++it;
+    }
+}
+```
+```cpp
+// 延遲加載：只在需要時加載圖像資源
+static inline auto &IMG(int img_type)noexcept(noexcept(RUtil::All_Image::GetAtlasRegion(RUtil::AtlasRegionID::_buffVFX1))){
+    switch(img_type){
+        case 0:return RUtil::All_Image::GetAtlasRegion(RUtil::AtlasRegionID::_buffVFX1);
+        case 1:return RUtil::All_Image::GetAtlasRegion(RUtil::AtlasRegionID::_buffVFX2);
+        default:return RUtil::All_Image::GetAtlasRegion(RUtil::AtlasRegionID::_buffVFX3);
+    }
+}
+```
+```cpp
+// 自動釋放不再使用的資源，減少記憶體占用
+void Auto_release_pool_manager::update(){
+    timer-=RUtil::Game_Input::delta_time();
+    if(timer<0.0F){
+        timer=CHECK_TIME;
+        for(const auto&it:check_box) it();  // 檢查並釋放不再使用的資源
+    }
+}
+```
+```cpp
+// 精靈圖批量渲染：高效繪製特效
+void Draw_pile_glow_eff::render(const std::shared_ptr<Draw::Draw_2D> &r2)const{
+    r2->SetBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    r2->SetColor(color, color_a);
+    auto&img=IMG(img_type);
+    // 批量渲染精靈圖
+    r2->draw(img, x+offset_x, y+offset_y, 
+             static_cast<float>(img->GetRegionWidth()), 
+             static_cast<float>(img->GetRegionHeight()), 
+             angle, 
+             static_cast<float>(img->GetRegionWidth())/2.0F, 
+             static_cast<float>(img->GetRegionHeight())/2.0F, 
+             scale, scale);
+}
+```
 
 **6. 動畫和視覺效果**
 - **問題**：如何實現流暢的動畫和視覺效果，使遊戲看起來更加生動和吸引人？
